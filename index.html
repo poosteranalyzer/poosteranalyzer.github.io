@@ -447,7 +447,7 @@ function wireOverlayEvents() {
 // ── render helpers ────────────────────────────────────────────────────────────
 let donutChart=null, hierChart=null;
 
-function renderInsights({pEmpty, pText, pImg, wordCount, wordCountIsEst, numColors, colorHarmony, bodyFontPt, contrastR, pdfWmm, noTextLayer}) {
+function renderInsights({pEmpty, pText, pImg, wordCount, wordCountIsEst, numColors, chromaticCount, colorHarmony, colorClash, bodyFontPt, contrastR, pdfWmm, noTextLayer}) {
   const items=[];
   // No text layer warning (only for fully image-based PDFs)
   if(noTextLayer) items.push({cls:'warn',icon:'⚠',msg:`<strong>No text layer detected</strong> — PDF has text baked into images. Word count and font sizes are unavailable; spatial maps use pixel-based estimation.`});
@@ -460,18 +460,22 @@ function renderInsights({pEmpty, pText, pImg, wordCount, wordCountIsEst, numColo
   else if(wordCount<=400)      items.push({cls:'good',icon:'✓',overlay:'text',msg:`<strong>${wLabel}</strong> — concise. Fits the working-memory sweet spot.`});
   else if(wordCount<=700) items.push({cls:'warn',icon:'⚠',overlay:'text',msg:`<strong>${wLabel}</strong> — on the heavy side. Try cutting to under 400.`});
   else                    items.push({cls:'bad', icon:'✗',overlay:'text',msg:`<strong>${wLabel}</strong> — cognitive overload risk. Cut aggressively.`});
-  // Color palette
-  const harmonyNote = colorHarmony==='analogous'    ? 'colours sit close on the wheel — harmonious.'
-                    : colorHarmony==='complementary' ? 'two contrasting hues — classic and balanced.'
+  // Color palette — judgement based on chromatic (non-neutral) hues only
+  const neutralCount=numColors-chromaticCount;
+  const neutralNote=neutralCount>0?` + ${neutralCount} neutral${neutralCount>1?'s':''}`:'';
+  const harmonyNote = colorHarmony==='analogous'    ? 'analogous hues — harmonious.'
+                    : colorHarmony==='complementary' ? 'complementary hues — classic contrast.'
                     : colorHarmony==='discordant'    ? 'hues spread widely across the wheel — may clash.'
-                    : colorHarmony==='varied'        ? 'mixed hue spread — check colours work together.'
-                    :                                  'mostly neutrals or a single hue.';
-  if(colorHarmony==='discordant')
-    items.push({cls:'warn',icon:'⚠',overlay:'graphics',msg:`<strong>${numColors} dominant colors</strong> — ${harmonyNote} Consider limiting to 2–3 intentional hues.`});
-  else if(numColors>6)
-    items.push({cls:'warn',icon:'⚠',overlay:'graphics',msg:`<strong>${numColors} dominant colors</strong> — ${harmonyNote} Simpler palettes read better from a distance.`});
+                    :                                  '';
+  const label=`<strong>${chromaticCount} distinct hue${chromaticCount>1?'s':''}${neutralNote}</strong>`;
+  if(chromaticCount===0)
+    items.push({cls:'good',icon:'✓',overlay:'graphics',msg:`<strong>Neutral palette</strong> — greyscale or near-white only. Add a single accent colour for hierarchy.`});
+  else if(colorHarmony==='discordant'||chromaticCount>3)
+    items.push({cls:'warn',icon:'⚠',overlay:'graphics',msg:`${label} — too many distinct hues. Simpler palettes read better from a distance; aim for 2–3 intentional colours.`});
+  else if(colorClash)
+    items.push({cls:'warn',icon:'⚠',overlay:'graphics',msg:`${label} — some hues sit too close together on the wheel: too similar to look intentional, too different to be the same family. Pick one and drop the rest, or space them clearly apart.`});
   else
-    items.push({cls:'good',icon:'✓',overlay:'graphics',msg:`<strong>${numColors} dominant colors</strong> — ${harmonyNote}`});
+    items.push({cls:'good',icon:'✓',overlay:'graphics',msg:`${label}${harmonyNote?' — '+harmonyNote:' — focused palette.'}`});
   // Contrast
   const cLevel = contrastR>=7?'AAA': contrastR>=4.5?'AA': contrastR>=3?'AA Large':'Fail';
   const cCls   = contrastR>=4.5?'good': contrastR>=3?'warn':'bad';
@@ -716,9 +720,31 @@ async function analyzePDF(file) {
   }
 
   const total=W*H;
-  const pEmpty=Math.round(cEmpty/total*100);
-  const pText =Math.round(cText/total*100);
-  const pImg  =Math.round(cImg/total*100);
+
+  // Block-based whitespace: avoids counting inter-line/inter-word gaps as whitespace.
+  // A tile only counts as whitespace if it contains zero text pixels —
+  // any tile touching a line of text (including the gap beneath it) becomes "text".
+  const BLK=16;
+  let blkEmpty=0, blkText=0, blkImg=0;
+  for(let by=0;by<H;by+=BLK){
+    for(let bx=0;bx<W;bx+=BLK){
+      let cE=0,cT=0,cI=0;
+      for(let y=by;y<Math.min(H,by+BLK);y++)
+        for(let x=bx;x<Math.min(W,bx+BLK);x++){
+          const i=y*W+x;
+          if(textMask[i]) cT++;
+          else if(emptyMask[i]) cE++;
+          else cI++;
+        }
+      if(cT>0) blkText++;
+      else if(cE>=cI) blkEmpty++;
+      else blkImg++;
+    }
+  }
+  const blkTotal=blkEmpty+blkText+blkImg||1;
+  const pEmpty=Math.round(blkEmpty/blkTotal*100);
+  const pText =Math.round(blkText/blkTotal*100);
+  const pImg  =Math.round(blkImg/blkTotal*100);
 
   // Palette
   setMsg('Palette…');
@@ -729,24 +755,104 @@ async function analyzePDF(file) {
     if((r+g+b)/(3*255)<0.96) samples.push([r,g,b]);
   }
   const palette=kMeans(samples,8,15);
+  // Merge clusters that are perceptually similar — k-means over-splits when the poster
+  // has few real colours (e.g. dark blue splits into 2-3 similar clusters).
+  // Any pair within RGB Euclidean distance 30 gets merged (smaller into larger), repeatedly.
+  (function mergeSimilar(){
+    let merged=true;
+    while(merged){
+      merged=false;
+      outer: for(let i=0;i<palette.length;i++){
+        for(let j=i+1;j<palette.length;j++){
+          const d=Math.sqrt((palette[i].r-palette[j].r)**2+(palette[i].g-palette[j].g)**2+(palette[i].b-palette[j].b)**2);
+          if(d<30){
+            const tot=palette[i].count+palette[j].count;
+            palette[i].r=Math.round((palette[i].r*palette[i].count+palette[j].r*palette[j].count)/tot);
+            palette[i].g=Math.round((palette[i].g*palette[i].count+palette[j].g*palette[j].count)/tot);
+            palette[i].b=Math.round((palette[i].b*palette[i].count+palette[j].b*palette[j].count)/tot);
+            palette[i].count=tot;
+            palette[i].hex=rgbToHex(palette[i].r,palette[i].g,palette[i].b);
+            palette.splice(j,1);
+            merged=true; break outer;
+          }
+        }
+      }
+    }
+    palette.sort((a,b)=>b.count-a.count);
+  })();
   const sampleTotal=palette.reduce((s,c)=>s+c.count,0)||1;
+
+  // Compute spatial centroid for each palette colour — where on the poster does each colour live?
+  // Uses a coarser stride (3×) since we only need rough positions, not accuracy.
+  const cxAcc=new Float32Array(palette.length);
+  const cyAcc=new Float32Array(palette.length);
+  const cxN  =new Uint32Array(palette.length);
+  for(let i=0;i<total;i+=step*3){
+    const r=px[i*4],g=px[i*4+1],b=px[i*4+2];
+    if((r+g+b)/(3*255)>=0.96) continue;
+    let best=0,bestD=Infinity;
+    for(let j=0;j<palette.length;j++){
+      const d=(r-palette[j].r)**2+(g-palette[j].g)**2+(b-palette[j].b)**2;
+      if(d<bestD){bestD=d;best=j;}
+    }
+    cxAcc[best]+=(i%W)/W;
+    cyAcc[best]+=Math.floor(i/W)/H;
+    cxN[best]++;
+  }
+  palette.forEach((c,j)=>{
+    c.cx = cxN[j]>0 ? cxAcc[j]/cxN[j] : 0.5;
+    c.cy = cxN[j]>0 ? cyAcc[j]/cxN[j] : 0.5;
+  });
+
   const dominant=palette.filter(c=>c.count/sampleTotal>0.01);
   const numColors=dominant.length;
+  // Chromatic count: only colours with meaningful saturation — neutrals (greys, whites) don't count as distinct hue choices
+  const chromaticCount=dominant.filter(c=>{const[,s,l]=rgbToHsl(c.r,c.g,c.b);return s>30&&l>10&&l<90;}).length;
 
   // Colour harmony: analyse hue spread of chromatic (non-gray) dominant colours
+  // Include coverage fraction so clash detection can be weighted by visual impact
   const chromatic=dominant
-    .map(c=>{ const [h,s,l]=rgbToHsl(c.r,c.g,c.b); return {h,s,l}; })
-    .filter(c=>c.s>20&&c.l>10&&c.l<90);
-  let colorHarmony='neutral';
+    .map(c=>{ const [h,s,l]=rgbToHsl(c.r,c.g,c.b); return {h,s,l,cov:c.count/sampleTotal,cx:c.cx,cy:c.cy}; })
+    .filter(c=>c.s>30&&c.l>10&&c.l<90);
+  let colorHarmony='neutral', colorClash=false;
   if(chromatic.length>=2){
     const hues=chromatic.map(c=>c.h).sort((a,b)=>a-b);
     const gaps=hues.map((h,i)=>(hues[(i+1)%hues.length]??hues[0]+360)-h);
     gaps[gaps.length-1]=hues[0]+360-hues[hues.length-1];
     const span=360-Math.max(...gaps);
-    if(span<60)                                    colorHarmony='analogous';
+    if(span<60)                                       colorHarmony='analogous';
     else if(chromatic.length===2&&span>150&&span<210) colorHarmony='complementary';
-    else if(chromatic.length>=4&&span>200)         colorHarmony='discordant';
-    else                                           colorHarmony='varied';
+    else if(chromatic.length>=4&&span>200)            colorHarmony='discordant';
+    else                                              colorHarmony='varied';
+
+    // For varied: flag a clash only if both colours in an awkward pair (20–50° apart)
+    // Pair clash: two colours in the awkward zone (20–50° apart), both visible, spatially close.
+    if(colorHarmony==='varied'){
+      outer: for(let i=0;i<chromatic.length;i++){
+        for(let j=i+1;j<chromatic.length;j++){
+          const d=Math.min(
+            Math.abs(chromatic[i].h-chromatic[j].h),
+            360-Math.abs(chromatic[i].h-chromatic[j].h)
+          );
+          if(d>20&&d<50&&chromatic[i].cov>0.04&&chromatic[j].cov>0.04){
+            const dx=chromatic[i].cx-chromatic[j].cx;
+            const dy=chromatic[i].cy-chromatic[j].cy;
+            if(Math.sqrt(dx*dx+dy*dy)<0.6){ colorClash=true; break outer; }
+          }
+        }
+      }
+    }
+    // Cluster clash: 3+ chromatic colours piling up within a 55° arc looks unintentional
+    // regardless of harmony type — e.g. orange + yellow + lime alongside a blue.
+    if(!colorClash){
+      for(let i=0;i<chromatic.length&&!colorClash;i++){
+        const cluster=chromatic.filter(c=>{
+          const d=Math.min(Math.abs(c.h-chromatic[i].h),360-Math.abs(c.h-chromatic[i].h));
+          return d<55;
+        });
+        if(cluster.length>=3 && cluster.filter(c=>c.cov>0.02).length>=3) colorClash=true;
+      }
+    }
   }
 
   // Font size analysis
@@ -836,7 +942,7 @@ async function analyzePDF(file) {
   document.getElementById('poster-dims').textContent=
     `${Math.round(nativeVP.width)}×${Math.round(nativeVP.height)} pt · ~${Math.round(pdfWmm)}×${Math.round(pdfWmm*nativeVP.height/nativeVP.width)}mm`;
 
-  renderInsights({pEmpty,pText,pImg,wordCount:bestWordCount,wordCountIsEst,numColors,colorHarmony,bodyFontPt,contrastR,pdfWmm,noTextLayer});
+  renderInsights({pEmpty,pText,pImg,wordCount:bestWordCount,wordCountIsEst,numColors,chromaticCount,colorHarmony,colorClash,bodyFontPt,contrastR,pdfWmm,noTextLayer});
   renderPalette(palette);
   renderBreakdown(bestWordCount, pEmpty, pText, pImg, noTextLayer, wordCountIsEst);
   renderMetrics(bodyFontPt, pdfWmm, contrastR, minFontPt);

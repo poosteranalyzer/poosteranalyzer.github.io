@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; worker-src blob: https://cdnjs.cloudflare.com;">
+<title>Pooster Analyzer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:       #03091A;
+  --surface:  #071428;
+  --surface2: #0C1E3E;
+  --border:   #14305A;
+  --text:     #E6F0FF;
+  --muted:    #4D7CAE;
+  --accent:   #0093D1;  /* KTH blue */
+  --good:     #2EC4A5;
+  --warn:     #F4A624;
+  --bad:      #E05050;
+  --c1:       #0093D1;  /* KTH blue — whitespace */
+  --c2:       #F4A261;  /* orange   — images     */
+  --c3:       #2EC4A5;  /* teal     — text       */
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  background-image: radial-gradient(var(--surface2) 1px, transparent 1px);
+  background-size: 28px 28px;
+  min-height: 100vh;
+  color: var(--text);
+}
+
+/* ── header ── */
+header {
+  padding: 14px 28px;
+  background: rgba(3,9,26,.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px;
+  position: sticky; top: 0; z-index: 50;
+}
+.logo { display: flex; align-items: center; gap: 9px; }
+.logo-mark {
+  width: 28px; height: 28px; border-radius: 7px;
+  background: linear-gradient(135deg, #0093D1, #003E6B);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; font-weight: 900; color: white;
+}
+header h1 { font-size: 1rem; font-weight: 700; letter-spacing: -.01em; }
+header p  { font-size: 0.78rem; color: var(--muted); flex: 1; }
+.hdr-btn  { padding: 6px 14px; border-radius: 7px; font-size: 0.78rem; font-weight: 600; cursor: pointer; border: 1px solid var(--border); transition: .15s; }
+#export-btn  { background: var(--surface2); color: var(--text); display: none; }
+#export-btn:hover  { border-color: var(--accent); color: var(--accent); }
+/* ── upload ── */
+#upload-area { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - 57px); }
+.drop-zone {
+  border: 1.5px dashed var(--border);
+  border-radius: 16px; padding: 56px 72px;
+  text-align: center; cursor: pointer; transition: .2s;
+  max-width: 460px; width: 90%;
+  background: var(--surface);
+}
+.drop-zone:hover, .drop-zone.over { border-color: var(--accent); background: var(--surface2); }
+.drop-zone .ico { font-size: 2.4rem; margin-bottom: 14px; opacity: .7; }
+.drop-zone h2 { font-size: 1.05rem; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+.drop-zone p  { color: var(--muted); font-size: 0.82rem; }
+input[type=file] { display: none; }
+
+/* ── loader ── */
+#loader { display: none; align-items: center; justify-content: center; min-height: calc(100vh - 57px); flex-direction: column; gap: 14px; color: var(--muted); font-size: 0.85rem; }
+.spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── main grid ── */
+#main { display: none; max-width: 1440px; margin: 0 auto; padding: 22px 26px 48px; }
+#main.visible { display: block; }
+.results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
+/* ── poster panel ── */
+.poster-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px;
+  display: flex; flex-direction: column; gap: 12px;
+  align-self: start; position: sticky; top: 73px;
+}
+.poster-name { font-size: 0.88rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.poster-dims { font-size: 0.68rem; color: var(--muted); font-family: monospace; }
+.canvas-wrap { position: relative; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.canvas-wrap canvas { display: block; width: 100%; }
+#poster-overlay { position: absolute; inset: 0; width: 100% !important; height: 100% !important; pointer-events: none; opacity: 0; transition: opacity .15s; }
+#poster-overlay.active { opacity: 1; }
+.hoverable { cursor: pointer; }
+.hoverable:hover { opacity: 0.85; }
+
+/* ── analysis panel ── */
+.analysis-panel { display: flex; flex-direction: column; gap: 12px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px 20px;
+  position: relative;
+}
+.card-title {
+  font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--muted);
+  margin-bottom: 14px; display: flex; align-items: center; gap: 7px;
+}
+
+/* ── info popovers ── */
+.info-btn {
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--surface2); border: 1px solid var(--border);
+  cursor: pointer; font-size: 0.58rem; font-weight: 800; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: .15s; line-height: 1;
+}
+.info-btn:hover { border-color: var(--accent); color: var(--accent); }
+.info-popover {
+  display: none; position: absolute; z-index: 100;
+  background: #020812; color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px 16px;
+  font-size: 0.76rem; line-height: 1.6; max-width: 280px;
+  box-shadow: 0 16px 48px rgba(0,0,0,.6);
+}
+.info-popover.visible { display: block; }
+.info-popover strong { color: white; }
+.info-popover .caveat { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.7rem; }
+
+/* ── insights ── */
+.insights-grid { display: flex; flex-direction: column; gap: 7px; }
+.insight { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 0.8rem; border: 1px solid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.insight.good { background: rgba(46,196,165,.08); border-color: rgba(46,196,165,.25); color: #5DDBC5; }
+.insight.warn { background: rgba(244,166,36,.08); border-color: rgba(244,166,36,.25); color: #F9C155; }
+.insight.bad  { background: rgba(224,80,80,.08);  border-color: rgba(224,80,80,.25);  color: #EF9090; }
+.insight-icon { font-size: 0.85rem; flex-shrink: 0; margin-top: 1px; }
+.insight-text strong { font-weight: 700; color: inherit; }
+.caveat-note { margin-top: 12px; font-size: 0.72rem; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 10px; }
+
+/* ── palette ── */
+.palette-bar { height: 10px; border-radius: 99px; overflow: hidden; display: flex; margin-bottom: 14px; gap: 2px; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.palette-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.swatch { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.swatch-dot { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(255,255,255,.08); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.swatch-hex { font-size: 0.56rem; color: var(--muted); font-family: 'Courier New', monospace; }
+
+/* ── breakdown ── */
+.breakdown-row { display: grid; grid-template-columns: 140px 1fr; gap: 20px; align-items: center; }
+.donut-wrap { position: relative; width: 140px; height: 140px; }
+.donut-wrap canvas { width: 140px !important; height: 140px !important; }
+.donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; text-align: center; }
+.donut-big { font-size: 1.55rem; font-weight: 800; line-height: 1; color: var(--text); }
+.donut-small { font-size: 0.58rem; color: var(--muted); margin-top: 3px; }
+.legend { display: flex; flex-direction: column; gap: 10px; }
+.legend-row { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--text); }
+.legend-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.legend-pct { font-weight: 700; margin-left: auto; font-family: monospace; }
+
+/* ── metrics ── */
+.metrics-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.metric-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; }
+.metric-label { font-size: 0.62rem; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 5px; }
+.metric-val { font-size: 1.2rem; font-weight: 800; font-family: monospace; }
+.metric-sub { font-size: 0.67rem; color: var(--muted); margin-top: 3px; }
+.metric-val.good { color: var(--good); }
+.metric-val.warn { color: var(--warn); }
+.metric-val.bad  { color: var(--bad);  }
+
+/* ── hierarchy ── */
+.hier-wrap { height: 120px; }
+.type-scale { display: flex; flex-direction: column; gap: 5px; margin-top: 16px; }
+.ts-row { display: grid; grid-template-columns: 60px 1fr 38px 30px; align-items: center; gap: 8px; }
+.ts-role { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.ts-bar-wrap { height: 5px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.ts-bar { height: 100%; border-radius: 3px; }
+.ts-pt { font-size: 0.7rem; font-family: monospace; color: var(--text); text-align: right; }
+.ts-pct { font-size: 0.62rem; color: var(--muted); text-align: right; }
+
+/* ── spatial maps ── */
+.maps-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.map-col { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.map-col canvas { width: 100% !important; border-radius: 6px; border: 1px solid var(--border); display: block; }
+.map-label { font-size: 0.67rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+
+/* ── reset button ── */
+#reset-btn { display: none; padding: 9px 24px; background: #0093D1; color: white; border: none; border-radius: 10px; font-size: 0.88rem; font-weight: 700; cursor: pointer; margin: 20px auto 0; }
+
+@media print {
+  body { background: white; color: black; background-image: none; }
+  header, #upload-area, #loader, #export-btn, #reset-btn { display: none !important; }
+  .card, .poster-panel { background: white !important; border-color: #ddd !important; }
+  .card-title, .poster-name, .legend-row, .metric-label, .metric-sub { color: #555 !important; }
+  .donut-big, .metric-val { color: black !important; }
+  #main { padding: 0; }
+  .results-grid { grid-template-columns: 1fr 1fr; }
+  .poster-panel { position: static; box-shadow: none; }
+  .card { break-inside: avoid; }
+}
+
+@media (max-width: 860px) {
+  .results-grid { grid-template-columns: 1fr; }
+  .poster-panel { position: static; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="logo-mark">P</div><h1>Pooster Analyzer</h1></div>
+  <p>Research poster analysis — drop a PDF to get started.</p>
+  <button class="hdr-btn" id="export-btn">↓ Export PDF</button>
+</header>
+
+<div id="upload-area">
+  <div class="drop-zone" id="drop-zone">
+    <div class="ico">📄</div>
+    <h2>Drop your poster PDF here</h2>
+    <p>or click to choose a file</p>
+    <input type="file" id="file-input" accept=".pdf,application/pdf">
+  </div>
+</div>
+
+<div id="loader"><div class="spinner"></div><span id="loader-msg">Loading…</span></div>
+
+<div id="main">
+  <div class="results-grid">
+
+    <!-- Poster -->
+    <div class="poster-panel">
+      <div><div class="poster-name" id="poster-name">—</div><div class="poster-dims" id="poster-dims"></div></div>
+      <div class="canvas-wrap">
+        <canvas id="poster-canvas"></canvas>
+        <canvas id="poster-overlay"></canvas>
+      </div>
+    </div>
+
+    <!-- Analysis -->
+    <div class="analysis-panel">
+
+      <div class="card">
+        <div class="card-title">Insights <button class="info-btn" data-info="insights">i</button></div>
+        <div class="info-popover" id="info-insights">
+          <strong>How insights are calculated</strong><br>
+          Each badge applies a fixed rule to the numbers extracted from your PDF:<br><br>
+          • <strong>Whitespace</strong> — pixels not covered by text or images, as % of total area<br>
+          • <strong>Word count</strong> — exact count from the PDF text layer<br>
+          • <strong>Palette</strong> — colors with >1% coverage after k-means clustering<br>
+          • <strong>Contrast</strong> — WCAG formula: ratio of luminance between avg text color and avg background<br>
+          • <strong>Legibility</strong> — median font size from the PDF, flagged against the ≥24pt rule for A0 posters at 1.5 m
+          <div class="caveat">Thresholds are heuristics from design guidelines, not empirical poster research.</div>
+        </div>
+        <div class="insights-grid" id="insights-grid"></div>
+        <p class="caveat-note">All green? That's a good sign — but it doesn't mean the poster is finished. These checks flag obvious problems; they can't judge clarity of message, logical flow, figure quality, or whether your story lands. Use this as a starting point, not a sign-off.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Palette <button class="info-btn" data-info="palette">i</button></div>
+        <div class="info-popover" id="info-palette">
+          <strong>How the palette is extracted</strong><br>
+          The rendered poster is sampled (~7,000 pixels) and grouped into 8 color clusters using <strong>k-means++</strong> — an algorithm that repeatedly asks "which pixels are most similar?" until it finds 8 representative colors.<br><br>
+          The bar width shows how much of the poster each color covers.
+          <div class="caveat">Near-white pixels are excluded so background doesn't dominate. Results vary slightly each run due to random initialization. Colours inside photos and figures are included, which may inflate the count if your poster contains images with a wide colour range.</div>
+        </div>
+        <div class="palette-bar" id="palette-bar"></div>
+        <div class="palette-swatches" id="palette-swatches"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Space Breakdown <button class="info-btn" data-info="breakdown">i</button></div>
+        <div class="info-popover" id="info-breakdown">
+          <strong>How space is classified</strong><br><br>
+          • <strong>Text</strong> — exact bounding boxes from the PDF text layer. No pixel guessing.<br><br>
+          • <strong>Whitespace</strong> — smooth, uniform pixels whose colour matches the poster's background (sampled from the page corners). True breathing room: margins, gutters, and empty areas. Solid-coloured boxes in a different colour are <em>not</em> counted as whitespace.<br><br>
+          • <strong>Graphics</strong> — everything else: photos, charts, illustrations, and also solid-coloured design fills (section backgrounds, coloured boxes, borders). Anything that is not whitespace or text ends up here.
+          <div class="caveat">Thin decorative lines and subtle textures sit on the boundary — they may be split between whitespace and images depending on their contrast.</div>
+        </div>
+        <div class="breakdown-row">
+          <div class="donut-wrap">
+            <canvas id="donut-canvas" width="150" height="150"></canvas>
+            <div class="donut-center"><div class="donut-big" id="donut-num">—</div><div class="donut-small">Words</div></div>
+          </div>
+          <div class="legend" id="legend"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Legibility &amp; Accessibility <button class="info-btn" data-info="legibility">i</button></div>
+        <div class="info-popover" id="info-legibility">
+          <strong>Legibility</strong> — font sizes come directly from the PDF's transform matrix (exact, not estimated). The median font size is used as the "body text" representative. The ≥24pt rule is based on the standard recommendation that body text on an A0 poster should be readable at 1.5 metres.<br><br>
+          <strong>Contrast ratio</strong> — how different the text colour is from the background, using the <strong>WCAG 2.1 formula</strong>. The scale runs from 1:1 (invisible — same colour) to 21:1 (maximum — pure black on pure white).<br><br>
+          <strong>Common reference points:</strong><br>
+          • 21:1 — black on white (maximum)<br>
+          • 7:1 — dark gray on white (WCAG AAA)<br>
+          • 4.5:1 — WCAG AA (web body text minimum)<br>
+          • 3:1 — WCAG AA Large (minimum for 18 pt+ text)<br>
+          • 2:1 — light gray on white (hard to read)<br>
+          • 1:1 — invisible<br><br>
+          Poster text is always large (≥18 pt), so <strong>3:1 is the practical minimum</strong> — though aiming for 4.5:1+ is better for accessibility.
+          <div class="caveat">This tool samples the most ink-like pixels in text regions and compares against the background. Individual text/background pairs may vary from this overall estimate.</div>
+        </div>
+        <div class="metrics-row" id="metrics-row"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Text Hierarchy <button class="info-btn" data-info="hierarchy">i</button></div>
+        <div class="info-popover" id="info-hierarchy">
+          <strong>How hierarchy is measured</strong><br>
+          Every text item in the PDF has an exact font size stored in its transform matrix. We collect all these sizes and find three representative levels:<br><br>
+          • <strong>Title</strong> — the largest font size found<br>
+          • <strong>Heading</strong> — the 15th percentile (upper range, excluding the outlier title)<br>
+          • <strong>Body</strong> — the 50th percentile (median, representing typical body text)<br><br>
+          Bars show each level as a % of the title size, so a flat chart means poor hierarchy.<br><br>
+          The <strong>type scale</strong> below lists every distinct font size found, its role, its point size, and what percentage of text items use it.
+          <div class="caveat">Decorative elements (logos, captions) can skew results if they use unusual sizes.</div>
+        </div>
+        <div class="hier-wrap"><canvas id="hier-canvas"></canvas></div>
+        <div class="type-scale" id="type-scale-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Spatial Maps <button class="info-btn" data-info="maps">i</button></div>
+        <div class="info-popover" id="info-maps">
+          <strong>How spatial maps are built</strong><br>
+          Each pixel of the rendered poster is assigned to exactly one category:<br><br>
+          • <strong>Text (green)</strong> — inside a PDF text bounding box<br>
+          • <strong>Empty (blue)</strong> — near-white rendered pixel, outside text boxes<br>
+          • <strong>Graphics (orange)</strong> — everything else: photos, charts, and coloured design fills<br><br>
+          The three maps highlight each category in color against a gray background, so you can see where each element type lives spatially on the poster.
+        </div>
+        <div class="maps-grid">
+          <div class="map-col"><canvas id="map-empty"></canvas><div class="map-label" style="color:#0093D1">Whitespace</div></div>
+          <div class="map-col"><canvas id="map-img"></canvas><div class="map-label" style="color:#F4A261">Graphics</div></div>
+          <div class="map-col"><canvas id="map-text"></canvas><div class="map-label" style="color:#2EC4A5">Text</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <button id="reset-btn">Analyze Another Poster</button>
+</div>
+
+<script type="module">
+import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
+
+// ── k-means ───────────────────────────────────────────────────────────────────
+function rgbToHex(r,g,b){ return '#'+[r,g,b].map(v=>Math.round(v).toString(16).padStart(2,'0')).join(''); }
+function dist2(a,b){ return (a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2; }
+function kMeans(samples, k=8, iters=15) {
+  if(!samples.length) return [];
+  const C=[samples[Math.floor(Math.random()*samples.length)].slice()];
+  while(C.length<k){
+    const d=samples.map(s=>Math.min(...C.map(c=>dist2(s,c))));
+    const t=d.reduce((a,b)=>a+b,0); let r=Math.random()*t;
+    for(let i=0;i<d.length;i++){r-=d[i];if(r<=0){C.push(samples[i].slice());break;}}
+  }
+  const asgn=new Int32Array(samples.length);
+  for(let it=0;it<iters;it++){
+    for(let i=0;i<samples.length;i++){let b=0,bd=Infinity;for(let j=0;j<k;j++){const d=dist2(samples[i],C[j]);if(d<bd){bd=d;b=j;}}asgn[i]=b;}
+    const s=Array.from({length:k},()=>[0,0,0,0]);
+    for(let i=0;i<samples.length;i++){const j=asgn[i];s[j][0]+=samples[i][0];s[j][1]+=samples[i][1];s[j][2]+=samples[i][2];s[j][3]++;}
+    for(let j=0;j<k;j++)if(s[j][3]>0)C[j]=[s[j][0]/s[j][3],s[j][1]/s[j][3],s[j][2]/s[j][3]];
+  }
+  const cnt=new Array(k).fill(0); for(const a of asgn)cnt[a]++;
+  return C.map((c,i)=>({r:Math.round(c[0]),g:Math.round(c[1]),b:Math.round(c[2]),count:cnt[i],hex:rgbToHex(c[0],c[1],c[2])}))
+          .filter(c=>c.count>0).sort((a,b)=>b.count-a.count);
+}
+
+// ── colour helpers ────────────────────────────────────────────────────────────
+function rgbToHsl(r,g,b){
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b), l=(max+min)/2;
+  if(max===min) return [0,0,l*100];
+  const d=max-min, s=l>0.5?d/(2-max-min):d/(max+min);
+  const h=max===r?((g-b)/d+(g<b?6:0))/6 : max===g?((b-r)/d+2)/6 : ((r-g)/d+4)/6;
+  return [h*360, s*100, l*100];
+}
+function linRGB(c){ const s=c/255; return s<=0.03928?s/12.92:((s+0.055)/1.055)**2.4; }
+function luminance([r,g,b]){ return 0.2126*linRGB(r)+0.7152*linRGB(g)+0.0722*linRGB(b); }
+function contrastRatio(c1,c2){
+  const l1=luminance(c1),l2=luminance(c2);
+  return (Math.max(l1,l2)+0.05)/(Math.min(l1,l2)+0.05);
+}
+
+// ── poster overlay ────────────────────────────────────────────────────────────
+let overlayState = null;
+
+function applyOverlay(mask, [r,g,b,a=160]) {
+  const oc = document.getElementById('poster-overlay');
+  if (!oc || !overlayState) return;
+  const {W, H} = overlayState;
+  oc.width = W; oc.height = H;
+  const ctx = oc.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  for (let i = 0; i < W*H; i++) {
+    if (mask[i]) {
+      d[i*4]=r; d[i*4+1]=g; d[i*4+2]=b; d[i*4+3]=a;
+    } else {
+      d[i*4+3]=110; // dim non-highlighted pixels
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  oc.classList.add('active');
+}
+
+function clearOverlay() {
+  const oc = document.getElementById('poster-overlay');
+  if (oc) oc.classList.remove('active');
+}
+
+
+function wireOverlayEvents() {
+  if (!overlayState) return;
+  const {emptyMask, textMask, imgMask} = overlayState;
+  const MASKS = {
+    whitespace: {mask: emptyMask, color: [0,147,209]},
+    text:       {mask: textMask,  color: [46,196,165]},
+    graphics:   {mask: imgMask,   color: [244,162,97]},
+  };
+
+  function bind(el, mask, color) {
+    el.classList.add('hoverable');
+    el.addEventListener('mouseenter', () => applyOverlay(mask, color));
+    el.addEventListener('mouseleave', clearOverlay);
+  }
+
+  // Space breakdown legend rows
+  document.querySelectorAll('#legend .legend-row').forEach((row, i) => {
+    const keys = ['whitespace','graphics','text'];
+    const {mask, color} = MASKS[keys[i]];
+    bind(row, mask, color);
+  });
+
+  // Spatial map thumbnails
+  document.querySelectorAll('.map-col').forEach((col, i) => {
+    const keys = ['whitespace','graphics','text'];
+    const {mask, color} = MASKS[keys[i]];
+    bind(col, mask, color);
+  });
+}
+
+// ── render helpers ────────────────────────────────────────────────────────────
+let donutChart=null, hierChart=null;
+
+function renderInsights({pEmpty, pText, pImg, wordCount, wordCountIsEst, numColors, colorHarmony, bodyFontPt, contrastR, pdfWmm, noTextLayer}) {
+  const items=[];
+  // No text layer warning (only for fully image-based PDFs)
+  if(noTextLayer) items.push({cls:'warn',icon:'⚠',msg:`<strong>No text layer detected</strong> — PDF has text baked into images. Word count and font sizes are unavailable; spatial maps use pixel-based estimation.`});
+  // Whitespace
+  if(pEmpty>=40) items.push({cls:'good',icon:'✓',overlay:'whitespace',msg:`<strong>${pEmpty}% whitespace</strong> — good breathing room for the reader.`});
+  else           items.push({cls:'warn',icon:'⚠',overlay:'whitespace',msg:`<strong>${pEmpty}% whitespace</strong> — poster feels dense; aim for ≥40% whitespace.`});
+  // Word count
+  const wLabel = wordCountIsEst ? `~${wordCount} words (estimated)` : `${wordCount} words`;
+  if(noTextLayer) items.push({cls:'warn',icon:'⚠',overlay:'text',msg:`<strong>Word count unavailable</strong> — no extractable text layer.`});
+  else if(wordCount<=400)      items.push({cls:'good',icon:'✓',overlay:'text',msg:`<strong>${wLabel}</strong> — concise. Fits the working-memory sweet spot.`});
+  else if(wordCount<=700) items.push({cls:'warn',icon:'⚠',overlay:'text',msg:`<strong>${wLabel}</strong> — on the heavy side. Try cutting to under 400.`});
+  else                    items.push({cls:'bad', icon:'✗',overlay:'text',msg:`<strong>${wLabel}</strong> — cognitive overload risk. Cut aggressively.`});
+  // Color palette
+  const harmonyNote = colorHarmony==='analogous'    ? 'colours sit close on the wheel — harmonious.'
+                    : colorHarmony==='complementary' ? 'two contrasting hues — classic and balanced.'
+                    : colorHarmony==='discordant'    ? 'hues spread widely across the wheel — may clash.'
+                    : colorHarmony==='varied'        ? 'mixed hue spread — check colours work together.'
+                    :                                  'mostly neutrals or a single hue.';
+  if(colorHarmony==='discordant')
+    items.push({cls:'warn',icon:'⚠',overlay:'graphics',msg:`<strong>${numColors} dominant colors</strong> — ${harmonyNote} Consider limiting to 2–3 intentional hues.`});
+  else if(numColors>6)
+    items.push({cls:'warn',icon:'⚠',overlay:'graphics',msg:`<strong>${numColors} dominant colors</strong> — ${harmonyNote} Simpler palettes read better from a distance.`});
+  else
+    items.push({cls:'good',icon:'✓',overlay:'graphics',msg:`<strong>${numColors} dominant colors</strong> — ${harmonyNote}`});
+  // Contrast
+  const cLevel = contrastR>=7?'AAA': contrastR>=4.5?'AA': contrastR>=3?'AA Large':'Fail';
+  const cCls   = contrastR>=4.5?'good': contrastR>=3?'warn':'bad';
+  const cIcon  = contrastR>=4.5?'✓': contrastR>=3?'⚠':'✗';
+  items.push({cls:cCls,icon:cIcon,overlay:'text',msg:`<strong>Contrast ${contrastR.toFixed(1)}:1 (${cLevel})</strong> — WCAG text accessibility.`});
+  // Legibility
+  if(bodyFontPt>0){
+    if(bodyFontPt>=24)      items.push({cls:'good',icon:'✓',overlay:'text',msg:`<strong>${Math.round(bodyFontPt)}pt body text</strong> — readable from 1.5 m.`});
+    else if(bodyFontPt>=18) items.push({cls:'warn',icon:'⚠',overlay:'text',msg:`<strong>${Math.round(bodyFontPt)}pt body text</strong> — borderline at 1.5 m. Aim for ≥24pt.`});
+    else                    items.push({cls:'bad', icon:'✗',overlay:'text',msg:`<strong>${Math.round(bodyFontPt)}pt body text</strong> — likely too small to read on the poster wall.`});
+  }
+
+  document.getElementById('insights-grid').innerHTML =
+    items.map(i=>`<div class="insight ${i.cls}" data-overlay="${i.overlay||''}"><span class="insight-icon">${i.icon}</span><span class="insight-text">${i.msg}</span></div>`).join('');
+}
+
+function renderPalette(palette) {
+  const total=palette.reduce((s,c)=>s+c.count,0)||1;
+  const bar=document.getElementById('palette-bar'), sw=document.getElementById('palette-swatches');
+  bar.innerHTML=sw.innerHTML='';
+  palette.forEach(c=>{
+    const pct=(c.count/total*100).toFixed(1);
+    const seg=document.createElement('div'); seg.style.cssText=`flex:${pct};background:${c.hex}`; bar.appendChild(seg);
+    sw.innerHTML+=`<div class="swatch"><div class="swatch-dot" style="background:${c.hex}"></div><div class="swatch-hex">${c.hex}</div></div>`;
+  });
+}
+
+function renderBreakdown(wordCount, pE, pT, pI, noTextLayer, wordCountIsEst) {
+  const donutEl=document.getElementById('donut-num');
+  if(noTextLayer)          { donutEl.textContent='?'; }
+  else if(wordCountIsEst)  { donutEl.textContent='~'+wordCount; donutEl.title='Estimated from character count (text encoding not decodable)'; }
+  else                     { donutEl.textContent=wordCount; donutEl.title=''; }
+  if(donutChart) donutChart.destroy();
+  donutChart=new Chart(document.getElementById('donut-canvas'),{
+    type:'doughnut',
+    data:{datasets:[{data:[pE,pI,pT],backgroundColor:['#0093D1','#F4A261','#2EC4A5'],borderWidth:0,borderRadius:3}]},
+    options:{cutout:'70%',plugins:{legend:{display:false},tooltip:{enabled:false}},animation:{duration:500}}
+  });
+  document.getElementById('legend').innerHTML=[
+    {l:'Whitespace',c:'#0093D1',v:pE},{l:'Graphics',c:'#F4A261',v:pI},{l:'Text',c:'#2EC4A5',v:pT}
+  ].map(x=>`<div class="legend-row"><div class="legend-dot" style="background:${x.c}"></div><span>${x.l}</span><span class="legend-pct">${x.v}%</span></div>`).join('');
+}
+
+function renderMetrics(bodyFontPt, pdfWmm, contrastR, minFontPt) {
+  const legStatus = bodyFontPt>=24?'good': bodyFontPt>=18?'warn':'bad';
+  const cLevel    = contrastR>=7?'AAA': contrastR>=4.5?'AA': contrastR>=3?'AA Large':'Fail';
+  const cStatus   = contrastR>=4.5?'good': contrastR>=3?'warn':'bad';
+  const cDesc     = contrastR>=7  ? 'Excellent — readable by all'
+                  : contrastR>=4.5? 'Good — meets web AA standard'
+                  : contrastR>=3  ? 'Acceptable for large poster text'
+                  : contrastR>=2  ? 'Low — may be hard to read'
+                  :                 'Very low — likely unreadable';
+  const size      = pdfWmm>800?'A0': pdfWmm>560?'A1': pdfWmm>390?'A2':'Custom';
+
+  document.getElementById('metrics-row').innerHTML=`
+    <div class="metric-box">
+      <div class="metric-label">Body Text Size</div>
+      <div class="metric-val ${legStatus}">${bodyFontPt>0?Math.round(bodyFontPt)+'pt':'—'}</div>
+      <div class="metric-sub">Min: ${minFontPt>0?Math.round(minFontPt)+'pt':' —'} · Poster: ${size} (${Math.round(pdfWmm)}×${Math.round(pdfWmm*1.414)}mm)</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-label">Text Contrast</div>
+      <div class="metric-val ${cStatus}">${contrastR.toFixed(1)}:1</div>
+      <div class="metric-sub">WCAG ${cLevel} · ${cDesc}</div>
+    </div>`;
+}
+
+function renderHierarchy(sizes, typeScale) {
+  if(hierChart) hierChart.destroy();
+  const vals=sizes?[sizes.title*100,sizes.heading*100,sizes.body*100]:[100,65,38];
+  const colors=sizes?['#0093D1','#4AB8E8','#2EC4A5']:['#14305A','#14305A','#14305A'];
+  hierChart=new Chart(document.getElementById('hier-canvas'),{
+    type:'bar',
+    data:{labels:['Title','Heading','Body'],datasets:[{data:vals,backgroundColor:colors,borderRadius:5,borderSkipped:false}]},
+    options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.raw.toFixed(0)}% of title`}}},
+      scales:{
+        y:{min:0,max:108,ticks:{callback:v=>v+'%',font:{size:10},color:'#4D7CAE'},grid:{color:'#0C1E3E'},border:{color:'#14305A'}},
+        x:{grid:{display:false},ticks:{font:{size:11,weight:'600'},color:'#E6F0FF'},border:{color:'#14305A'}}
+      },animation:{duration:500}}
+  });
+
+  const roleColor={Title:'#0093D1',Heading:'#4AB8E8',Subhead:'#7DCFE8',Body:'#2EC4A5',Caption:'#4D7CAE'};
+  const el=document.getElementById('type-scale-list');
+  if(!typeScale||!typeScale.length){
+    el.innerHTML='<div style="color:var(--muted);font-size:0.75rem;margin-top:8px">No text layer — font sizes unavailable</div>';
+    return;
+  }
+  const maxPt=typeScale[0].pt;
+  el.innerHTML=typeScale.map(({pt,pct,role})=>`
+    <div class="ts-row">
+      <span class="ts-role" style="color:${roleColor[role]}">${role}</span>
+      <div class="ts-bar-wrap"><div class="ts-bar" style="width:${Math.round(pt/maxPt*100)}%;background:${roleColor[role]}"></div></div>
+      <span class="ts-pt">${pt}pt</span>
+      <span class="ts-pct">${pct}%</span>
+    </div>`).join('');
+}
+
+function renderMaps(W,H,emptyMask,textMask,imgMask){
+  [{id:'map-empty',mask:emptyMask,rgb:[0,147,209]},{id:'map-img',mask:imgMask,rgb:[244,162,97]},{id:'map-text',mask:textMask,rgb:[46,196,165]}]
+  .forEach(({id,mask,rgb})=>{
+    const c=document.getElementById(id); c.width=W; c.height=H;
+    const ctx=c.getContext('2d'), img=ctx.createImageData(W,H), d=img.data;
+    for(let i=0;i<mask.length;i++){
+      const on=mask[i]; d[i*4]=on?rgb[0]:230; d[i*4+1]=on?rgb[1]:230; d[i*4+2]=on?rgb[2]:230; d[i*4+3]=255;
+    }
+    ctx.putImageData(img,0,0);
+  });
+}
+
+// ── PDF analysis ──────────────────────────────────────────────────────────────
+async function analyzePDF(file) {
+  const setMsg=m=>document.getElementById('loader-msg').textContent=m;
+
+  document.getElementById('upload-area').style.display='none';
+  document.getElementById('loader').style.display='flex';
+  setMsg('Loading PDF…');
+
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  const page=await pdf.getPage(1);
+
+  const RENDER_W=700;
+  const nativeVP=page.getViewport({scale:1});
+  const scale=RENDER_W/nativeVP.width;
+  const viewport=page.getViewport({scale});
+  const W=Math.round(viewport.width), H=Math.round(viewport.height);
+
+  setMsg('Rendering…');
+  await new Promise(r=>setTimeout(r,0)); // yield — let message paint
+  const off=new OffscreenCanvas(W,H);
+  const ctx=off.getContext('2d');
+  await page.render({canvasContext:ctx,viewport}).promise;
+  const imageData=ctx.getImageData(0,0,W,H);
+  const px=imageData.data;
+
+  setMsg('Extracting text…');
+  await new Promise(r=>setTimeout(r,0));
+  const tc=await page.getTextContent();
+  // Primary word count: count \w-matched tokens in decoded strings.
+  const wordCount=tc.items.map(i=>i.str).join(' ').trim().split(/\s+/).filter(w=>/\w/.test(w)).length;
+  // Fallback character count: works even when PDF encodes text as glyph IDs (garbled strings).
+  // InDesign/Keynote exports often produce non-Unicode item.str but the CHARACTER COUNT is
+  // still correct (one PDF char ≈ one rendered glyph ≈ one text character).
+  const totalChars=tc.items.reduce((s,i)=>s+i.str.replace(/\s/g,'').length,0);
+
+  // Build text mask + collect font sizes
+  const textMask=new Uint8Array(W*H);
+  const fontSizes=[];
+
+  for(const item of tc.items){
+    if(!item.str.trim()) continue;
+    const [a,,, d,tx,ty]=item.transform;
+    // Use the larger of the two scale components to handle rotated text
+    const fs=Math.max(Math.abs(a), Math.abs(d))*scale;
+    // item.width can be 0 in some PDFs; fall back to character-count estimate
+    const iw=(item.width>0 ? item.width : Math.abs(a)*item.str.length*0.55)*scale;
+    const x0=Math.round(tx*scale), y0=Math.round(H-ty*scale);
+    const yTop=Math.round(y0-fs), y1=Math.round(y0+fs*0.25);
+    const x1=Math.round(x0+Math.max(iw, fs*0.4));
+    if(fs>1) fontSizes.push(fs);
+    for(let row=Math.max(0,yTop);row<Math.min(H,y1);row++)
+      for(let col=Math.max(0,x0);col<Math.min(W,x1);col++)
+        textMask[row*W+col]=1;
+  }
+
+  // Single classification pass: whitespace | text (fallback) | image.
+  // TEXTURE_THRESH declared first — was previously after the fallback block (TDZ bug).
+  // When the PDF has no text layer (noLayer), text pixels are detected inline via a
+  // 5×5 patch heuristic: few distinct colours + high luminance range = ink+paper = text.
+  // colorBuf is allocated once outside the loop — no per-pixel GC pressure.
+  setMsg('Analysing pixels…');
+  await new Promise(r=>setTimeout(r,0));
+  const TEXTURE_THRESH = 15;
+  const emptyMask = new Uint8Array(W * H);
+  const imgMask   = new Uint8Array(W * H);
+  const noLayer   = fontSizes.length === 0;
+  const colorBuf  = noLayer ? new Uint32Array(30) : null;
+  let cEmpty=0, cImg=0, cText=0;
+  // Pre-count text pixels already set by PDF text layer
+  for(let i=0;i<W*H;i++) if(textMask[i]) cText++;
+
+  // Estimate background colour from all four corners (30×30 px each).
+  // Only smooth regions that match this colour count as whitespace —
+  // solid-coloured section headers, tinted boxes etc. go into images instead.
+  {
+    let br=0,bg_=0,bb=0,bn=0;
+    const CS=Math.min(30,W,H);
+    for(let y=0;y<CS;y++) for(let x=0;x<CS;x++){
+      const corners=[[x,y],[W-1-x,y],[x,H-1-y],[W-1-x,H-1-y]];
+      for(const [cx,cy] of corners){const j=(cy*W+cx)*4;br+=px[j];bg_+=px[j+1];bb+=px[j+2];bn++;}
+    }
+    var bgR=br/bn, bgG=bg_/bn, bgB=bb/bn;
+  }
+  // Allow up to 28 units per channel from background to still be "whitespace".
+  // Tighter = fewer smooth-but-coloured regions counted as empty space.
+  const BG_THRESH = 28;
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (textMask[i]) continue;
+      const cr = px[i*4], cg = px[i*4+1], cb = px[i*4+2];
+      let diff = 0, n = 0;
+      if (x > 0)   { const j=(i-1)*4; diff+=Math.abs(px[j]-cr)+Math.abs(px[j+1]-cg)+Math.abs(px[j+2]-cb); n+=3; }
+      if (x < W-1) { const j=(i+1)*4; diff+=Math.abs(px[j]-cr)+Math.abs(px[j+1]-cg)+Math.abs(px[j+2]-cb); n+=3; }
+      if (y > 0)   { const j=(i-W)*4; diff+=Math.abs(px[j]-cr)+Math.abs(px[j+1]-cg)+Math.abs(px[j+2]-cb); n+=3; }
+      if (y < H-1) { const j=(i+W)*4; diff+=Math.abs(px[j]-cr)+Math.abs(px[j+1]-cg)+Math.abs(px[j+2]-cb); n+=3; }
+
+      if (n === 0 || diff / n < TEXTURE_THRESH) {
+        // Smooth pixel — only whitespace if colour matches the background.
+        const nearBg = Math.abs(cr-bgR)<=BG_THRESH && Math.abs(cg-bgG)<=BG_THRESH && Math.abs(cb-bgB)<=BG_THRESH;
+        if(nearBg){ emptyMask[i]=1; cEmpty++; } else { imgMask[i]=1; cImg++; }
+        continue;
+      }
+
+      // High-variation pixel: if no text layer, check 5×5 patch for text signature.
+      // Pre-allocated colorBuf avoids per-pixel object allocation; early-exit on >12 colours.
+      if (noLayer) {
+        let nColors = 0, minL = 255, maxL = 0;
+        outer: for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            const ny = y+dy, nx = x+dx;
+            if (ny < 0 || ny >= H || nx < 0 || nx >= W) continue;
+            const j = (ny*W+nx)*4;
+            const q = ((px[j]>>4)<<8)|((px[j+1]>>4)<<4)|(px[j+2]>>4);
+            let found = false;
+            for (let k = 0; k < nColors; k++) if (colorBuf[k]===q){found=true;break;}
+            if (!found) {
+              colorBuf[nColors++] = q;
+              if (nColors > 12) { nColors = 99; break outer; }
+            }
+            const lum = (px[j]+px[j+1]+px[j+2]) / 3;
+            if (lum < minL) minL = lum;
+            if (lum > maxL) maxL = lum;
+          }
+        }
+        if (nColors <= 12 && maxL - minL > 60) { textMask[i]=1; cText++; continue; }
+      }
+
+      imgMask[i]=1; cImg++;
+    }
+  }
+
+  const total=W*H;
+  const pEmpty=Math.round(cEmpty/total*100);
+  const pText =Math.round(cText/total*100);
+  const pImg  =Math.round(cImg/total*100);
+
+  // Palette
+  setMsg('Palette…');
+  const step=Math.max(1,Math.floor(total/7000));
+  const samples=[];
+  for(let i=0;i<total;i+=step){
+    const r=px[i*4],g=px[i*4+1],b=px[i*4+2];
+    if((r+g+b)/(3*255)<0.96) samples.push([r,g,b]);
+  }
+  const palette=kMeans(samples,8,15);
+  const sampleTotal=palette.reduce((s,c)=>s+c.count,0)||1;
+  const dominant=palette.filter(c=>c.count/sampleTotal>0.01);
+  const numColors=dominant.length;
+
+  // Colour harmony: analyse hue spread of chromatic (non-gray) dominant colours
+  const chromatic=dominant
+    .map(c=>{ const [h,s,l]=rgbToHsl(c.r,c.g,c.b); return {h,s,l}; })
+    .filter(c=>c.s>20&&c.l>10&&c.l<90);
+  let colorHarmony='neutral';
+  if(chromatic.length>=2){
+    const hues=chromatic.map(c=>c.h).sort((a,b)=>a-b);
+    const gaps=hues.map((h,i)=>(hues[(i+1)%hues.length]??hues[0]+360)-h);
+    gaps[gaps.length-1]=hues[0]+360-hues[hues.length-1];
+    const span=360-Math.max(...gaps);
+    if(span<60)                                    colorHarmony='analogous';
+    else if(chromatic.length===2&&span>150&&span<210) colorHarmony='complementary';
+    else if(chromatic.length>=4&&span>200)         colorHarmony='discordant';
+    else                                           colorHarmony='varied';
+  }
+
+  // Font size analysis
+  fontSizes.sort((a,b)=>a-b);
+  const bodyFontPt=fontSizes.length>0 ? fontSizes[Math.floor(fontSizes.length*0.5)]/scale : 0;
+  const minFontPt =fontSizes.length>0 ? fontSizes[0]/scale : 0;
+
+  // Text hierarchy + type scale
+  let hierarchy=null, typeScale=[];
+  if(fontSizes.length>3){
+    const sizeFreq={};
+    for(const s of fontSizes){ const r=Math.round(s); sizeFreq[r]=(sizeFreq[r]||0)+1; }
+    const uniq=Object.keys(sizeFreq).map(Number).sort((a,b)=>a-b);
+    const maxSize=uniq[uniq.length-1];
+    const bodySize=uniq.reduce((best,s)=>sizeFreq[s]>sizeFreq[best]?s:best,uniq[0]);
+    const mid=uniq.filter(s=>s>bodySize&&s<maxSize);
+    const headingSize=mid.length>0
+      ? mid.reduce((best,s)=>sizeFreq[s]>sizeFreq[best]?s:best,mid[0])
+      : uniq.length>=2 ? uniq[uniq.length-2] : bodySize;
+    hierarchy={title:1, heading:headingSize/maxSize, body:bodySize/maxSize};
+
+    // Type scale: all distinct sizes with roles, filtered to ≥1% frequency, capped at 8
+    const total_fs=fontSizes.length;
+    typeScale=[...uniq].reverse()
+      .map(s=>({
+        pt: Math.round(s/scale),
+        pct: Math.round(sizeFreq[s]/total_fs*100),
+        role: s===maxSize?'Title': s===headingSize?'Heading': s===bodySize?'Body': s>bodySize?'Subhead':'Caption'
+      }))
+      .filter(t=>t.pct>=1)
+      .slice(0,8);
+  }
+
+  // Physical poster size
+  const pdfWmm=nativeVP.width/72*25.4;
+
+  // Color contrast: WCAG ratio between ink color and background color.
+  // Problem with naive approach: textMask covers full bounding boxes, which are mostly
+  // background-coloured pixels (paper between strokes). Averaging all of them gives a
+  // gray midpoint instead of the ink colour, massively underestimating contrast.
+  // Fix: first establish background luminance from emptyMask, then from textMask only
+  // keep pixels whose luminance differs from background by more than a threshold —
+  // those are the actual ink pixels (or anti-aliased edges).
+  const avgColor=arr=>{
+    if(!arr.length) return [0,0,0];
+    return [arr.reduce((s,c)=>s+c[0],0)/arr.length,
+            arr.reduce((s,c)=>s+c[1],0)/arr.length,
+            arr.reduce((s,c)=>s+c[2],0)/arr.length];
+  };
+  const bColors=[];
+  for(let i=0;i<W*H;i+=7) if(emptyMask[i]) bColors.push([px[i*4],px[i*4+1],px[i*4+2]]);
+  const bgAvg=avgColor(bColors);
+  const bgLum=luminance(bgAvg);
+
+  // Collect candidate ink pixels: text-region pixels that differ from background by >0.08 lum.
+  // Then sort by distance-from-background descending and take the most-ink-like 25%.
+  // This avoids the antialiasing averaging problem: edge pixels between ink and paper pull
+  // a naive average toward a grayish midpoint, giving falsely low contrast values.
+  // Works for both dark-on-light AND light-on-dark text.
+  const tColors=[];
+  for(let i=0;i<W*H;i+=7){
+    if(!textMask[i]) continue;
+    const c=[px[i*4],px[i*4+1],px[i*4+2]];
+    if(Math.abs(luminance(c)-bgLum)>0.08) tColors.push(c);
+  }
+  if(!tColors.length) for(let i=0;i<W*H;i+=7) if(textMask[i]) tColors.push([px[i*4],px[i*4+1],px[i*4+2]]);
+  // Sort by luminance distance from background — most ink-like first
+  tColors.sort((a,b)=>Math.abs(luminance(b)-bgLum)-Math.abs(luminance(a)-bgLum));
+  const inkColors=tColors.slice(0,Math.max(1,Math.floor(tColors.length*0.25)));
+  const contrastR=contrastRatio(avgColor(inkColors), bgAvg);
+
+  // noTextLayer: truly no extractable text (pixel fallback needed for everything).
+  // Distinguish from "text exists but strings are garbled" (totalChars > 0).
+  const noTextLayer=fontSizes.length===0 && totalChars===0;
+  // Best word count: decoded strings first, then char-count estimate (/5 ≈ avg word length),
+  // then pixel-detected text gives 0 (shown as ? only when absolutely nothing extractable).
+  const bestWordCount = wordCount>0 ? wordCount
+    : totalChars>0 ? Math.round(totalChars/5)
+    : 0;
+  const wordCountIsEst = wordCount===0 && totalChars>0;
+
+  // ── render ──
+  const pc=document.getElementById('poster-canvas');
+  pc.width=W; pc.height=H;
+  pc.getContext('2d').putImageData(imageData,0,0);
+  document.getElementById('poster-name').textContent=file.name.replace(/\.pdf$/i,'');
+  document.getElementById('poster-dims').textContent=
+    `${Math.round(nativeVP.width)}×${Math.round(nativeVP.height)} pt · ~${Math.round(pdfWmm)}×${Math.round(pdfWmm*nativeVP.height/nativeVP.width)}mm`;
+
+  renderInsights({pEmpty,pText,pImg,wordCount:bestWordCount,wordCountIsEst,numColors,colorHarmony,bodyFontPt,contrastR,pdfWmm,noTextLayer});
+  renderPalette(palette);
+  renderBreakdown(bestWordCount, pEmpty, pText, pImg, noTextLayer, wordCountIsEst);
+  renderMetrics(bodyFontPt, pdfWmm, contrastR, minFontPt);
+  renderHierarchy(hierarchy, typeScale);
+  renderMaps(W,H,emptyMask,textMask,imgMask);
+
+  overlayState = {W, H, emptyMask, textMask, imgMask};
+  wireOverlayEvents();
+
+  document.getElementById('loader').style.display='none';
+  document.getElementById('main').classList.add('visible');
+  document.getElementById('export-btn').style.display='inline-block';
+  document.getElementById('reset-btn').style.display='block';
+
+}
+
+// ── wiring ────────────────────────────────────────────────────────────────────
+const dropZone=document.getElementById('drop-zone'), fileInput=document.getElementById('file-input');
+dropZone.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>e.target.files[0]&&analyzePDF(e.target.files[0]));
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('over');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('over'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('over');const f=e.dataTransfer.files[0];if(f)analyzePDF(f);});
+
+document.getElementById('export-btn').addEventListener('click',()=>window.print());
+
+// ── info popovers ─────────────────────────────────────────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.info-btn');
+  // Close all first
+  document.querySelectorAll('.info-popover').forEach(p => p.classList.remove('visible'));
+  if (!btn) return;
+  e.stopPropagation();
+  const pop = document.getElementById('info-' + btn.dataset.info);
+  if (!pop) return;
+  pop.classList.add('visible');
+  // Position: below the button
+  const rect = btn.getBoundingClientRect();
+  const parentRect = pop.parentElement.getBoundingClientRect();
+  pop.style.top  = (rect.bottom - parentRect.top + 6) + 'px';
+  pop.style.left = Math.min(rect.left - parentRect.left, parentRect.width - 300) + 'px';
+});
+
+document.getElementById('reset-btn').addEventListener('click',()=>{
+  overlayState=null;
+  clearOverlay();
+  document.getElementById('main').classList.remove('visible');
+  document.getElementById('export-btn').style.display='none';
+  document.getElementById('reset-btn').style.display='none';
+  document.getElementById('upload-area').style.display='flex';
+  fileInput.value='';
+});
+</script>
+</body>
+</html>

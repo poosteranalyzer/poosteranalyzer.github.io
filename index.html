@@ -252,10 +252,9 @@ input[type=file] { display: none; }
           <div class="caveat">Thresholds are heuristics from design guidelines, not empirical poster research.</div>
         </div>
         <div class="insights-grid" id="insights-grid"></div>
-         <p class="caveat-note">All green? That's a good sign, but it doesn't mean the poster is finished. These checks flag obvious problems; they can't judge clarity of message, logical 
-  flow, figure quality, or whether your story lands. They also can't tell you where a viewer's eye will actually go first and whether your layout follows a natural Z or F reading path,
-   or whether your title, key figure, and conclusion form a clear visual sequence. Use this as a starting point, not a sign-off.</p>  
-      </div>   
+        <p class="caveat-note">All green? That's a good sign — but it doesn't mean the poster is finished. These checks flag obvious problems; they can't judge clarity of message, logical flow, figure quality, or whether your story lands. They also can't tell you where a viewer's eye will actually go first — whether your layout follows a natural Z or F reading path, or whether your title, key figure, and conclusion form a clear visual sequence. Use this as a starting point, not a sign-off.</p>
+      </div>
+
       <div class="card">
         <div class="card-title">Palette <button class="info-btn" data-info="palette">i</button></div>
         <div class="info-popover" id="info-palette">
@@ -587,12 +586,22 @@ function renderMaps(W,H,emptyMask,textMask,imgMask){
 }
 
 // ── PDF analysis ──────────────────────────────────────────────────────────────
+function showError(msg) {
+  document.getElementById('loader').style.display='none';
+  document.getElementById('upload-area').style.display='flex';
+  alert(msg);
+}
+
 async function analyzePDF(file) {
   const setMsg=m=>document.getElementById('loader-msg').textContent=m;
+
+  if(file.size > 50 * 1024 * 1024) { showError('PDF is too large (max 50 MB). Try exporting at lower quality.'); return; }
 
   document.getElementById('upload-area').style.display='none';
   document.getElementById('loader').style.display='flex';
   setMsg('Loading PDF…');
+
+  try {
 
   const buf=await file.arrayBuffer();
   const pdf=await pdfjsLib.getDocument({data:buf}).promise;
@@ -958,6 +967,10 @@ async function analyzePDF(file) {
   document.getElementById('export-btn').style.display='inline-block';
   document.getElementById('reset-btn').style.display='block';
 
+  } catch(err) {
+    console.error(err);
+    showError('Could not analyse this PDF. It may be corrupted, password-protected, or an unsupported format.');
+  }
 }
 
 // ── wiring ────────────────────────────────────────────────────────────────────

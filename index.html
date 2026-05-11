@@ -340,7 +340,7 @@ input[type=file] { display: none; }
   </div>
 
   <button id="reset-btn">Analyze Another Poster</button>
-  <p style="text-align:center;margin-top:16px;font-size:0.7rem;color:#4D7CAE">A side project by Pooria· <a href="https://github.com/poosteranalyzer/poosteranalyzer.github.io" style="color:#4D7CAE">source</a></p>
+  <p style="text-align:center;margin-top:16px;font-size:0.7rem;color:#4D7CAE">A side project by Pooria Ghavamian · <a href="https://github.com/poosteranalyzer/poosteranalyzer.github.io" style="color:#4D7CAE">source</a></p>
 </div>
 
 <script type="module">
@@ -683,12 +683,17 @@ async function analyzePDF(file) {
       bSamples.push((y*W+b)*4);
       bSamples.push((y*W+W-1-b)*4);
     }
-    const rgbs=bSamples.map(j=>({r:px[j],g:px[j+1],b:px[j+2],lum:(px[j]+px[j+1]+px[j+2])/3}));
-    rgbs.sort((a,b_)=>b_.lum-a.lum);
-    const top=rgbs.slice(0,Math.max(1,Math.floor(rgbs.length*0.25)));
-    var bgR=top.reduce((s,c)=>s+c.r,0)/top.length;
-    var bgG=top.reduce((s,c)=>s+c.g,0)/top.length;
-    var bgB=top.reduce((s,c)=>s+c.b,0)/top.length;
+    // Find the most common colour in the border by quantizing to 16-step bins
+    // (avoids treating every slightly-different pixel as a unique colour).
+    // This works for any background colour — light, dark, or tinted.
+    const freq={};
+    let bestKey='',bestCount=0;
+    for(const j of bSamples){
+      const key=((px[j]>>4)<<8)|((px[j+1]>>4)<<4)|(px[j+2]>>4);
+      const n=(freq[key]=(freq[key]||0)+1);
+      if(n>bestCount){bestCount=n;bestKey=key;}
+    }
+    var bgR=((bestKey>>8)&0xf)*17, bgG=((bestKey>>4)&0xf)*17, bgB=(bestKey&0xf)*17;
   }
   // Allow up to 28 units per channel from background to still be "whitespace".
   // Tighter = fewer smooth-but-coloured regions counted as empty space.

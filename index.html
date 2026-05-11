@@ -340,6 +340,7 @@ input[type=file] { display: none; }
   </div>
 
   <button id="reset-btn">Analyze Another Poster</button>
+  <p style="text-align:center;margin-top:16px;font-size:0.7rem;color:#4D7CAE">A side project by Pooria· <a href="https://github.com/poosteranalyzer/poosteranalyzer.github.io" style="color:#4D7CAE">source</a></p>
 </div>
 
 <script type="module">
@@ -667,21 +668,31 @@ async function analyzePDF(file) {
   // Pre-count text pixels already set by PDF text layer
   for(let i=0;i<W*H;i++) if(textMask[i]) cText++;
 
-  // Estimate background colour from all four corners (30×30 px each).
-  // Only smooth regions that match this colour count as whitespace —
-  // solid-coloured section headers, tinted boxes etc. go into images instead.
+  // Estimate background colour from the full page border (8px strip on all four edges).
+  // Then take the brightest 25% of those samples — the actual background (white/near-white)
+  // will always be among the brightest border pixels even if corners contain logos or
+  // coloured header/footer bands that would corrupt a simple corner average.
   {
-    let br=0,bg_=0,bb=0,bn=0;
-    const CS=Math.min(30,W,H);
-    for(let y=0;y<CS;y++) for(let x=0;x<CS;x++){
-      const corners=[[x,y],[W-1-x,y],[x,H-1-y],[W-1-x,H-1-y]];
-      for(const [cx,cy] of corners){const j=(cy*W+cx)*4;br+=px[j];bg_+=px[j+1];bb+=px[j+2];bn++;}
+    const bSamples=[];
+    const BSTRIP=8;
+    for(let x=0;x<W;x+=3) for(let b=0;b<BSTRIP;b++){
+      bSamples.push((b*W+x)*4);
+      bSamples.push(((H-1-b)*W+x)*4);
     }
-    var bgR=br/bn, bgG=bg_/bn, bgB=bb/bn;
+    for(let y=0;y<H;y+=3) for(let b=0;b<BSTRIP;b++){
+      bSamples.push((y*W+b)*4);
+      bSamples.push((y*W+W-1-b)*4);
+    }
+    const rgbs=bSamples.map(j=>({r:px[j],g:px[j+1],b:px[j+2],lum:(px[j]+px[j+1]+px[j+2])/3}));
+    rgbs.sort((a,b_)=>b_.lum-a.lum);
+    const top=rgbs.slice(0,Math.max(1,Math.floor(rgbs.length*0.25)));
+    var bgR=top.reduce((s,c)=>s+c.r,0)/top.length;
+    var bgG=top.reduce((s,c)=>s+c.g,0)/top.length;
+    var bgB=top.reduce((s,c)=>s+c.b,0)/top.length;
   }
   // Allow up to 28 units per channel from background to still be "whitespace".
   // Tighter = fewer smooth-but-coloured regions counted as empty space.
-  const BG_THRESH = 28;
+  const BG_THRESH = 35;
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
